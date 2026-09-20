@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>陶瓷窑车层架载荷追踪台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🏺</span>
+      <div>
+        <h1>陶瓷窑车层架载荷追踪台</h1>
+        <small>自下而上录入棚板 / 坯件 / 立柱，系统逐层分摊累加载荷</small>
+      </div>
+    </div>
+    <div class="actions">
+      <span id="saveState" class="save-state" title="自动保存状态"></span>
+      <button id="btnReset" class="btn btn-ghost" type="button">↺ 恢复示例</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 左：录入面板 -->
+    <aside class="editor" id="editor">
+      <div class="editor-head">
+        <h2>架体录入（自下而上）</h2>
+      </div>
+
+      <section class="card car-card">
+        <h3>窑车台面</h3>
+        <div class="grid2">
+          <label>台面宽 W (mm)
+            <input type="number" step="any" data-car="w" />
+          </label>
+          <label>台面深 D (mm)
+            <input type="number" step="any" data-car="d" />
+          </label>
+        </div>
+      </section>
+
+      <div id="layerList"></div>
+
+      <button id="btnAddLayer" class="btn btn-add" type="button">＋ 在顶部增加一层</button>
+      <p class="hint">任意输入变化都会<span class="hl">整架重算</span>并自动保存；坐标原点为台面左下角，单位 mm，重量 kg。</p>
+    </aside>
+
+    <!-- 右：结果区 -->
+    <section class="result">
+      <div class="totals" id="totals"></div>
+
+      <div class="views">
+        <div class="view-box">
+          <div class="view-head">
+            <h2>俯视图（XY 平面，叠加全部层）</h2>
+            <div class="legend">
+              <span><i class="dot normal"></i>正常立柱</span>
+              <span><i class="dot overload"></i>超载</span>
+              <span><i class="dot overlap"></i>落点重叠</span>
+              <span><i class="dot hanging"></i>悬空</span>
+              <span><i class="dot failed"></i>失效（推演）</span>
+            </div>
+          </div>
+          <canvas id="topView"></canvas>
+        </div>
+
+        <div class="view-box">
+          <div class="view-head">
+            <h2>侧视图（分层高度）</h2>
+            <div class="seg">
+              <button class="seg-btn active" data-axis="x" type="button">X–Z 立面</button>
+              <button class="seg-btn" data-axis="y" type="button">Y–Z 立面</button>
+            </div>
+          </div>
+          <canvas id="sideView"></canvas>
+        </div>
+      </div>
+
+      <div class="panel sim-panel">
+        <div class="sim-head">
+          <h2>🔮 立柱失效推演 <span id="simStatus" class="badge">未启用</span></h2>
+          <button id="btnClearSim" class="btn btn-ghost" type="button" disabled>✕ 清空选择 · 恢复基准</button>
+        </div>
+        <p class="hint">
+          勾选下方<b>非悬空</b>立柱作为「失效柱」：系统以当前编辑数据为基准，将其视为不承载后按原规则整架重新分摊，
+          并排对比基准与推演结果。失效标记仅本次会话有效，<span class="hl">不会改写或自动保存</span>架体数据；
+          清空选择立即恢复基准。视图中失效柱为粉色 ⊘（原悬空柱仍为紫色 ✕），点击立柱可查看推演后的载荷来源链。
+        </p>
+        <div id="simPicker" class="sim-picker"></div>
+        <div id="simOutput"></div>
+      </div>
+
+      <div class="bottom-grid">
+        <div class="panel issues-panel">
+          <h2>告警与判定 <span id="issueCount" class="badge"></span></h2>
+          <ul id="issueList"></ul>
+        </div>
+        <div class="panel detail-panel">
+          <h2 id="detailTitle">载荷来源明细</h2>
+          <div id="detailBody"><p class="muted">点击俯视图/侧视图中的立柱或棚板，查看其载荷来源链。</p></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

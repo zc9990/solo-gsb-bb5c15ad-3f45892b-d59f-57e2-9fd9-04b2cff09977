@@ -1,0 +1,48 @@
+{
+  "car": { "name": "窑车台面", "w": 1300, "d": 900 },
+  "layers": [
+    {
+      "id": "L1",
+      "name": "第一层（底层）",
+      "height": 320,
+      "board": { "x": 0, "y": 0, "w": 1300, "d": 900, "weight": 240 },
+      "wareWeight": 360,
+      "posts": [
+        { "id": "P1", "x": 150, "y": 150, "capacity": 450 },
+        { "id": "P2", "x": 1150, "y": 150, "capacity": 450 },
+        { "id": "P3", "x": 150, "y": 750, "capacity": 450 },
+        { "id": "P4", "x": 1150, "y": 750, "capacity": 450 },
+        { "id": "P5", "x": 650, "y": 450, "capacity": 200 }
+      ]
+    },
+    {
+      "id": "L2",
+      "name": "第二层",
+      "height": 320,
+      "board": { "x": 80, "y": 80, "w": 1140, "d": 740, "weight": 200 },
+      "wareWeight": 400,
+      "posts": [
+        { "id": "P1", "x": 200, "y": 200, "capacity": 350 },
+        { "id": "P2", "x": 1080, "y": 200, "capacity": 350 },
+        { "id": "P3", "x": 200, "y": 700, "capacity": 350 },
+        { "id": "P4", "x": 1080, "y": 700, "capacity": 350 }
+      ]
+    },
+    {
+      "id": "L3",
+      "name": "第三层（顶层）",
+      "height": 320,
+      "board": { "x": 160, "y": 160, "w": 900, "d": 500, "weight": 160 },
+      "wareWeight": 620,
+      "posts": [
+        { "id": "P1", "x": 260, "y": 260, "capacity": 300 },
+        { "id": "P2", "x": 980, "y": 260, "capacity": 300 },
+        { "id": "P3", "x": 260, "y": 580, "capacity": 300 },
+        { "id": "P4", "x": 980, "y": 580, "capacity": 300 },
+        { "id": "P5", "x": 600, "y": 420, "capacity": 120 },
+        { "id": "P6", "x": 600, "y": 425, "capacity": 120 },
+        { "id": "P7", "x": 1230, "y": 400, "capacity": 100 }
+      ]
+    }
+  ]
+}

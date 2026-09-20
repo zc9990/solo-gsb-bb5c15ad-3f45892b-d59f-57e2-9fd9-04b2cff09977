@@ -1,0 +1,16 @@
+services:
+  kiln-rack:
+    build: .
+    image: kiln-rack-load-tracker:latest
+    container_name: kiln-rack
+    ports:
+      # 宿主机端口 : 容器端口（容器内默认 8000）
+      - "${HOST_PORT:-8000}:8000"
+    environment:
+      # 容器内监听端口，与上面映射的右侧保持一致
+      - PORT=8000
+      - KILN_DATA_DIR=/app/data
+    volumes:
+      # 持久化编辑结果：data/state.json 自动保存在宿主机，重启不丢
+      - ./data:/app/data
+    restart: unless-stopped
