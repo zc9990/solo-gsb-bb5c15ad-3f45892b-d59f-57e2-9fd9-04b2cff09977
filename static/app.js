@@ -19,6 +19,16 @@ let recalcTimer = null;
 const topHit = [];       // 俯视图可点击热区
 const sideHit = [];      // 侧视图可点击热区
 
+/* ================= 加柱建议状态 =================
+ * suggestData 只来自 POST /api/suggest 的试算结果（或离线兜底），绝不写盘；
+ * 仅当用户在预览中点「确认加柱」后，才把新柱追加进 state 走原有 PUT /api/state 保存。
+ */
+let suggestData = null;        // 最近一次试算结果
+let suggestPreviewRank = null; // 当前预览方案 rank（1..5）
+let suggestSeq = 0;            // 试算请求序号，丢弃过期响应
+let suggestAppliedMsg = null;  // 确认加柱后的一次性提示
+const SUGGEST_COLOR = "#ffd54a";
+
 /* ================= 数值/工具 ================= */
 const $ = (sel) => document.querySelector(sel);
 const fmt = (v) => (Math.round(v * 100) / 100).toLocaleString("zh-CN", { maximumFractionDigits: 2 });
@@ -71,9 +81,12 @@ function collectState() {
 }
 
 /* ================= 重算 + 保存 + 渲染 ================= */
-async function recalcAndRender() {
+async function recalcAndRender(applySuggestion) {
   const payload = collectState();
-  setSaveState("saving", "重算并保存中…");
+  setSaveState("saving", applySuggestion ? "写入新柱并保存中…" : "重算并保存中…");
+  // 架体一经编辑/写盘，之前的加柱试算结果即作废（确认写入的那次除外）
+  if (!applySuggestion) invalidateSuggestions({ silent: true });
+  suggestAppliedMsg = null;
   try {
     const res = await fetch("/api/state", {
       method: "PUT",
@@ -85,9 +98,11 @@ async function recalcAndRender() {
     result = data.result;
     state = payload;
     setSaveState("saved", "✓ 已重算并保存 " + new Date().toLocaleTimeString("zh-CN"));
+    if (applySuggestion) suggestAppliedMsg = "✓ 新柱已写入架体并触发自动保存";
   } catch (err) {
     setSaveState("error", "保存失败，仅本地重算");
     result = calculateLocal(payload);
+    if (applySuggestion) suggestAppliedMsg = "✓ 新柱已加入本地编辑（后端不可用，未能保存）";
   }
   selection = selection && stillExists(selection) ? selection : null;
   // 编辑只更新基准；若正在推演，用同一失效选择在新基准上重跑（失效标记不保存）
@@ -322,6 +337,8 @@ $("#btnReset").addEventListener("click", async () => {
   state = data.state; result = data.result;
   selection = null;
   failedSelection = []; simulation = null; simDiff = null; simSeq++;
+  invalidateSuggestions({ silent: true });
+  suggestAppliedMsg = null;
   renderEditor(); renderResults(); markLayerBadges();
   setSaveState("saved", "✓ 已恢复示例 " + new Date().toLocaleTimeString("zh-CN"));
 });
@@ -342,6 +359,8 @@ function renderResults() {
   drawSide();
   renderDetail();
   renderSimPanel();
+  renderSuggestOptions();
+  renderSuggestPanel();
 }
 
 function renderTotals() {
@@ -530,6 +549,36 @@ function drawTop() {
       topHit.push({ kind: "post", layer: li, post: p.id, x: cx, y: cy, r: 9 });
     });
   });
+
+  drawSuggestPreview(ctx, tr);
+}
+
+/* 加柱建议预览：在俯视图上叠加建议新柱（金色 ⊕），不改基准数据 */
+function drawSuggestPreview(ctx, tr) {
+  const legend = $("#suggestLegend");
+  if (legend) legend.classList.toggle("on", !!previewPlan());
+  const plan = previewPlan();
+  if (!plan) return;
+  const sp = plan.post;
+  const cx = tr.X(sp.x), cy = tr.Y(sp.y);
+  // 外圈光晕
+  ctx.beginPath();
+  ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,213,74,0.18)";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx, cy, 6.5, 0, Math.PI * 2);
+  ctx.fillStyle = SUGGEST_COLOR;
+  ctx.fill();
+  ctx.strokeStyle = "#5a4a00";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(cx - 3.6, cy); ctx.lineTo(cx + 3.6, cy);
+  ctx.moveTo(cx, cy - 3.6); ctx.lineTo(cx, cy + 3.6);
+  ctx.stroke();
+  ctx.fillStyle = SUGGEST_COLOR;
+  ctx.font = "bold 10px sans-serif";
+  ctx.fillText(`新柱 ${sp.id} (${fmt(sp.x)},${fmt(sp.y)}) 载荷 ${fmt(sp.load)} kg`, cx + 12, cy + 3);
 }
 
 /* 俯视图点击/悬停 */
@@ -941,6 +990,278 @@ function renderSimOutput() {
 
 $("#btnClearSim").addEventListener("click", clearSimulation);
 
+/* ================= 加柱建议面板 ================= */
+function previewPlan() {
+  if (!suggestData || suggestPreviewRank == null) return null;
+  return (suggestData.plans || []).find((p) => p.rank === suggestPreviewRank) || null;
+}
+
+/* 架体发生编辑/重置：上次试算作废（不影响已确认保存的数据） */
+function invalidateSuggestions(opts) {
+  const wasActive = !!suggestData;
+  suggestData = null;
+  suggestPreviewRank = null;
+  suggestSeq++;
+ 
+  if (wasActive && !(opts && opts.silent)) {
+    // 目前作废由 renderSuggestPanel 统一渲染提示；保留钩子便于扩展
+  }
+  if (!opts || !opts.silent) renderSuggestPanel();
+}
+
+function renderSuggestOptions() {
+  const sel = $("#suggestLayer");
+  if (!sel || !state) return;
+  const keep = sel.value;
+  const opts = state.layers.map((L, i) =>
+    `<option value="${i}">${escapeHtml(L.name)}（承托面：${i === 0 ? escapeHtml(state.car.name) : escapeHtml(state.layers[i - 1].name) + "棚板"}）</option>`).join("");
+  if (sel.innerHTML !== opts) sel.innerHTML = opts;
+  if (keep !== "" && state.layers[+keep]) sel.value = keep;
+  if (result && typeof result.toleranceMm === "number") {
+    const t = $("#tolText");
+    if (t) t.textContent = result.toleranceMm;
+  }
+}
+
+async function runSuggest() {
+  if (!state) return;
+  const layer = +$("#suggestLayer").value;
+  const spacing = num($("#suggestSpacing").value);
+  const capacity = num($("#suggestCapacity").value);
+  const status = $("#suggestStatus");
+  suggestAppliedMsg = null;
+  status.textContent = "试算中…";
+  status.className = "badge has-sim";
+  const seq = ++suggestSeq;
+  let data;
+  try {
+    const res = await fetch("/api/suggest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state, layer, spacing, capacity }),
+    });
+    data = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (seq !== suggestSeq) return;
+      suggestData = null; suggestPreviewRank = null;
+      renderSuggestPanel((data && data.error) || `试算失败（HTTP ${res.status}）`);
+      return;
+    }
+  } catch (e) {
+    try {
+      data = suggestLocal(state, layer, spacing, capacity); // 离线兜底：与后端同一套算法
+    } catch (e2) {
+      if (seq !== suggestSeq) return;
+      suggestData = null; suggestPreviewRank = null;
+      renderSuggestPanel(e2.message);
+      return;
+    }
+  }
+  if (seq !== suggestSeq) return; // 期间已有编辑/重置，丢弃过期响应
+  suggestData = data;
+  suggestPreviewRank = null;
+ 
+  renderSuggestPanel();
+}
+
+function selectSuggestPlan(rank) {
+  if (!suggestData) return;
+  suggestPreviewRank = rank;
+  renderSuggestPanel();
+  drawTop();
+}
+
+function cancelSuggestPreview() {
+  // 取消预览：仅清掉叠加层，试算结果保留可再次点击；绝不改动架体数据
+  suggestPreviewRank = null;
+  renderSuggestPanel();
+  drawTop();
+}
+
+async function confirmSuggestPlan() {
+  const plan = previewPlan();
+  if (!plan || !suggestData) return;
+  const li = suggestData.layer;
+  if (!state.layers[li]) {
+    invalidateSuggestions();
+    return;
+  }
+  // 二次确认：此前任何编辑都会清空试算结果，走到这里说明数据未变
+  if (!confirm(`在「${suggestData.layerName}」新增立柱 ${plan.post.id}（${fmt(plan.post.x)}, ${fmt(plan.post.y)}），容量 ${plan.post.capacity > 0 ? fmt(plan.post.capacity) + " kg" : "不限"}？确认后将写入架体并自动保存。`)) return;
+  // 确认后才写入：追加新柱 → 走原有编辑通道（PUT /api/state）触发自动保存
+  state.layers[li].posts.push({
+    id: plan.post.id,
+    x: plan.post.x,
+    y: plan.post.y,
+    capacity: plan.post.capacity,
+  });
+  const appliedId = plan.post.id;
+  suggestData = null;
+  suggestPreviewRank = null;
+  renderEditor();
+  await recalcAndRender(true);
+  selection = { kind: "post", layer: li, post: appliedId };
+  renderDetail(); drawTop(); drawSide();
+  renderSuggestPanel();
+}
+
+function pctText(u) {
+  return u == null ? "—（无容量限制柱）" : Math.round(u * 100) + "%";
+}
+
+function renderSuggestPanel(errText) {
+  const out = $("#suggestOutput");
+  const status = $("#suggestStatus");
+  const btnCancel = $("#btnCancelSuggest");
+  const btnConfirm = $("#btnConfirmSuggest");
+  if (!out) return;
+  const plan = previewPlan();
+  btnCancel.disabled = !plan;
+  btnConfirm.disabled = !plan;
+
+  if (suggestAppliedMsg) {
+    status.textContent = "已加柱";
+    status.className = "badge has-suggest";
+  } else if (!suggestData) {
+    status.textContent = errText ? "参数有误" : "未试算";
+    status.className = "badge";
+  } else if (plan) {
+    status.textContent = `预览方案 ${plan.rank}/5`;
+    status.className = "badge has-suggest";
+  } else {
+    status.textContent = suggestData.plans.length ? `已试算 · ${suggestData.feasibleCount} 个可行点` : "无可行点";
+    status.className = "badge";
+  }
+
+  if (suggestAppliedMsg) {
+    out.innerHTML = `<p class="sug-applied">${escapeHtml(suggestAppliedMsg)}</p>` + suggestionClosedHtml();
+    return;
+  }
+  if (errText) {
+    out.innerHTML = `<p class="sug-error">⚠ ${escapeHtml(errText)}</p>`;
+    return;
+  }
+  if (!suggestData) {
+    out.innerHTML = `<p class="muted" style="margin:8px 0 0">设置目标层、候选网格间距与新柱容量后点击「开始试算」。试算只在后端逐点计算，不会改动当前架体；点击返回的方案可在俯视图预览新柱位置与试算后的告警变化。</p>`;
+    return;
+  }
+  if (!suggestData.plans.length) {
+    out.innerHTML = `
+      <p class="sug-error">🚫 无可行点：${escapeHtml(suggestData.reason || "候选条件下没有可新增立柱的位置")}</p>
+      <p class="muted" style="margin:4px 0 0">
+        目标层：<b>${escapeHtml(suggestData.layerName)}</b>；候选网格点 ${suggestData.gridCount} 个、可行点 ${suggestData.feasibleCount} 个；
+        重叠阈值 ${suggestData.toleranceMm || TOL_MM} mm。可尝试加大网格间距、调整现有立柱或更换目标层。
+      </p>`;
+    return;
+  }
+
+  const bm = suggestData.baselineMetrics;
+  const summary = `
+    <div class="sug-summary">
+      <span>${escapeHtml(suggestData.layerName)}</span>
+      <span>网格间距 <b>${fmt(suggestData.spacing)}</b> mm</span>
+      <span>新柱容量 <b>${suggestData.capacity > 0 ? fmt(suggestData.capacity) + " kg" : "不限"}</b></span>
+      <span>候选点 <b>${suggestData.gridCount}</b></span>
+      <span>可行点 <b>${suggestData.feasibleCount}</b></span>
+    </div>
+    <p class="hint" style="margin:4px 0 0">基准：丢失载荷 ${fmt(bm.lostLoad)} kg · 超载 ${bm.overloadCount} 根 · 最高利用率 ${pctText(bm.maxUtilization)}。点击方案卡片在俯视图预览；确认后才写入架体并自动保存。</p>`;
+
+  const cards = suggestData.plans.map((p) => suggestCardHtml(p, bm)).join("");
+  out.innerHTML = summary + `<div class="sug-cards">${cards}</div>`;
+
+  out.querySelectorAll(".sug-card").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest(".sug-inner")) return; // 展开区内点击不重复切换
+      selectSuggestPlan(+el.dataset.rank);
+    });
+  });
+  out.querySelectorAll(".sug-issues li[data-layer]").forEach((li) => {
+    li.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const layer = +li.dataset.layer;
+      const post = li.dataset.post ? decodeURIComponent(li.dataset.post) : "";
+      selection = post
+        ? { kind: "post", layer, post }
+        : { kind: "board", layer };
+      renderDetail(); drawTop(); drawSide();
+    });
+  });
+}
+
+function suggestionClosedHtml() {
+  return `<p class="muted" style="margin:4px 0 0">可重新设置参数并试算下一根新柱。</p>`;
+}
+
+function suggestCardHtml(p, bm) {
+  const selected = p.rank === suggestPreviewRank;
+  const m = p.metrics;
+  const layerRows = p.layers.map((r) => {
+    const totD = r.loadTotal.trial - r.loadTotal.base;
+    const lostD = r.lostLoad.trial - r.lostLoad.base;
+    const carD = r.loadCarried.trial - r.loadCarried.base;
+    const ovD = r.overloadCount.trial - r.overloadCount.base;
+    const cell = (base, trial, d, goodDown) => {
+      const cls = Math.abs(d) < 1e-9 ? "" : (goodDown ? (d < 0 ? "down" : "up2") : (d > 0 ? "down" : "up2"));
+      return `<td>${fmt(base)} → <b>${fmt(trial)}</b> <span class="${cls}">${Math.abs(d) < 1e-9 ? "" : (d > 0 ? "+" : "") + fmt(d)}</span></td>`;
+    };
+    return `<tr${r.layer === suggestData.layer ? ' class="target"' : ""}>
+      <td>${escapeHtml(r.name)}${r.layer === suggestData.layer ? ' <em>目标层</em>' : ""}</td>
+      ${cell(r.loadTotal.base, r.loadTotal.trial, totD, false)}
+      ${cell(r.lostLoad.base, r.lostLoad.trial, lostD, true)}
+      ${cell(r.loadCarried.base, r.loadCarried.trial, carD, false)}
+      ${cell(r.overloadCount.base, r.overloadCount.trial, ovD, true)}
+    </tr>`;
+  }).join("");
+  const issueBlock = (title, arr, cls, mark) => arr.length
+    ? arr.map((iss) =>
+        `<li class="${iss.level} ${cls}" data-layer="${iss.layer}" data-post="${iss.post == null ? "" : encodeURIComponent(iss.post)}">
+           <span class="itype">${escapeHtml(mark)}</span><span>${escapeHtml(iss.message)}</span></li>`).join("")
+    : `<li class="muted" style="cursor:default">无${title}告警</li>`;
+  return `
+  <div class="sug-card${selected ? " selected" : ""}" data-rank="${p.rank}">
+    <div class="sug-card-head">
+      <span class="sug-rank">方案 ${p.rank}</span>
+      <span class="sug-coord">新柱 ${escapeHtml(p.post.id)}（${fmt(p.post.x)}, ${fmt(p.post.y)}）</span>
+      <span class="sug-load">载荷 ${fmt(p.post.load)} kg${p.post.capacity > 0 ? ` / ${fmt(p.post.capacity)} kg` : " / 不限容量"}</span>
+      <span class="sug-go">${selected ? "预览中 ▴" : "点击预览 ▸"}</span>
+    </div>
+    ${selected ? `
+    <div class="sug-inner" onclick="event.stopPropagation()">
+      <div class="sug-metrics">
+        <div class="sug-metric ${m.lostLoad < bm.lostLoad ? "good" : ""}"><span>丢失载荷</span><b>${fmt(bm.lostLoad)} → ${fmt(m.lostLoad)}</b><small>${m.lostLoad < bm.lostLoad ? "−" + fmt(bm.lostLoad - m.lostLoad) + " kg" : "±0"}</small></div>
+        <div class="sug-metric ${m.overloadCount < bm.overloadCount ? "good" : m.overloadCount > bm.overloadCount ? "bad" : ""}"><span>超载柱数</span><b>${bm.overloadCount} → ${m.overloadCount}</b><small>${m.overloadCount < bm.overloadCount ? "−" + (bm.overloadCount - m.overloadCount) : m.overloadCount > bm.overloadCount ? "+" + (m.overloadCount - bm.overloadCount) : "±0"} 根</small></div>
+        <div class="sug-metric"><span>最高利用率</span><b>${pctText(bm.maxUtilization)} → ${pctText(m.maxUtilization)}</b><small>容量 0 不计</small></div>
+        <div class="sug-metric"><span>传到台面</span><b>${fmt(bm.carriedAtBottom)} → ${fmt(m.carriedAtBottom)}</b><small>kg</small></div>
+      </div>
+      <div class="sug-table-wrap">
+        <table class="src-table sug-table">
+          <tr class="head"><td>层</td><td>本层总载荷 kg</td><td>丢失载荷 kg</td><td>下传载荷 kg</td><td>超载柱</td></tr>
+          ${layerRows}
+        </table>
+      </div>
+      <div class="sug-issue-cols">
+        <div>
+          <div class="sub-title">新增告警</div>
+          <ul class="sug-issues">${issueBlock("新增", p.issues.added, "is-added", "新增")}</ul>
+        </div>
+        <div>
+          <div class="sub-title">消除告警</div>
+          <ul class="sug-issues">${issueBlock("消除", p.issues.removed, "is-removed", "消除")}</ul>
+        </div>
+      </div>
+    </div>` : ""}
+  </div>`;
+}
+
+$("#btnSuggest").addEventListener("click", runSuggest);
+$("#btnCancelSuggest").addEventListener("click", cancelSuggestPreview);
+$("#btnConfirmSuggest").addEventListener("click", confirmSuggestPlan);
+// 调整试算参数即视为新一轮试算开始，清掉旧提示
+["suggestLayer", "suggestSpacing", "suggestCapacity"].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("change", () => { suggestAppliedMsg = null; renderSuggestPanel(); });
+});
+
 /* ================= 画布随窗口缩放重绘 ================= */
 window.addEventListener("resize", debounce(() => { drawTop(); drawSide(); }, 150));
 
@@ -1154,5 +1475,167 @@ function diffResults(base, sim) {
     lostLoad: pair("lostLoad"),
     posts,
     newIssues,
+  };
+}
+
+/* ======================================================================
+ * 加柱建议离线兜底：与 app/calc.py 的 suggest_posts 对齐（只算不存）
+ * ==================================================================== */
+function suggestLocal(rawState, layer, spacing, capacity) {
+  const norm = (() => {
+    // calculateLocal 内部已做宽容规范化；这里显式构造一份可安全深改的规范化输入
+    const car = {
+      name: (rawState.car && rawState.car.name) || "窑车台面",
+      w: Math.max(0, num(rawState.car && rawState.car.w)),
+      d: Math.max(0, num(rawState.car && rawState.car.d)),
+    };
+    const layers = (rawState.layers || []).map((l0, idx) => {
+      const b0 = l0.board || {};
+      return {
+        id: l0.id || "L" + idx,
+        name: l0.name || "第" + (idx + 1) + "层",
+        height: Math.max(0, num(l0.height)),
+        board: { x: num(b0.x), y: num(b0.y), w: Math.max(0, num(b0.w)), d: Math.max(0, num(b0.d)), weight: Math.max(0, num(b0.weight)) },
+        wareWeight: Math.max(0, num(l0.wareWeight)),
+        posts: (l0.posts || []).map((p0, j) => ({ id: String(p0.id || "P" + (j + 1)), x: num(p0.x), y: num(p0.y), capacity: num(p0.capacity) })),
+      };
+    });
+    return { car, layers };
+  })();
+
+  const err = (msg) => { throw new Error(msg); };
+  const li = Math.trunc(+layer);
+  if (!Number.isInteger(li) || li < 0 || li >= norm.layers.length) {
+    err(`目标层 ${layer} 不存在：当前共 ${norm.layers.length} 层`);
+  }
+  const gap = parseFloat(spacing);
+  if (!Number.isFinite(gap) || gap <= 0) err("候选网格间距必须大于 0");
+  const cap = parseFloat(capacity);
+  if (!Number.isFinite(cap) || cap < 0) err("新柱容量不能为负；0 表示不限容量");
+
+  const supportRect = li === 0
+    ? { x: 0, y: 0, w: norm.car.w, d: norm.car.d }
+    : { x: norm.layers[li - 1].board.x, y: norm.layers[li - 1].board.y, w: norm.layers[li - 1].board.w, d: norm.layers[li - 1].board.d };
+
+  const baseline = calculateLocal(norm);
+  const layerName = norm.layers[li].name;
+  const noPlans = (gridCount, feasibleCount, reason) => ({
+    ok: true, layer: li, layerName, spacing: r2(gap), capacity: r2(cap),
+    gridCount, feasibleCount, plans: [], baseline, reason, toleranceMm: TOL_MM,
+  });
+
+  if (supportRect.w <= 0 || supportRect.d <= 0) {
+    return noPlans(0, 0, `${layerName}的承托面宽或深为 0（${r2(supportRect.w)}×${r2(supportRect.d)} mm），没有可落柱的位置，请先修正承托面尺寸`);
+  }
+  const inRect = (x, y, rc) => x >= rc.x - 1e-9 && x <= rc.x + rc.w + 1e-9 && y >= rc.y - 1e-9 && y <= rc.y + rc.d + 1e-9;
+  // 与后端一致：用 normalize 后的未截断坐标判定现有有效柱距离
+  const existing = norm.layers[li].posts
+    .filter((p) => inRect(p.x, p.y, supportRect))
+    .map((p) => [p.x, p.y]);
+  const x0 = supportRect.x, y0 = supportRect.y;
+  const x1 = x0 + supportRect.w, y1 = y0 + supportRect.d;
+  const nx = Math.floor((x1 - x0) / gap) + 1;
+  const ny = Math.floor((y1 - y0) / gap) + 1;
+  const gridCount = nx * ny;
+  if (gridCount > 4096) {
+    return noPlans(gridCount, 0, `候选网格过密：间距 ${r2(gap)} mm 在承托面（${r2(supportRect.w)}×${r2(supportRect.d)} mm）上产生 ${gridCount} 个候选点，超过试算上限 4096 个，请加大候选网格间距后重试`);
+  }
+  const used = new Set(norm.layers[li].posts.map((p) => p.id));
+  let newId = null;
+  for (let kk = 1; !newId; kk++) { if (!used.has("P" + kk)) newId = "P" + kk; }
+
+  const feasible = [];
+  for (let ix = 0; ix < nx; ix++) {
+    const x = x0 + ix * gap;
+    if (x > x1 + 1e-9) continue;
+    for (let iy = 0; iy < ny; iy++) {
+      const y = y0 + iy * gap;
+      if (y > y1 + 1e-9) continue;
+      let close = false;
+      for (const [ex, ey] of existing) {
+        if (Math.hypot(x - ex, y - ey) <= TOL_MM) { close = true; break; }
+      }
+      if (!close) feasible.push([x, y]);
+    }
+  }
+  if (!feasible.length) {
+    return noPlans(gridCount, 0, `${layerName}承托面内的 ${gridCount} 个网格候选点，全部与现有有效立柱落点距离 ≤ ${TOL_MM} mm（重叠阈值），没有可新增立柱的位置；可减小现有立柱密度后再试`);
+  }
+
+  const countOver = (res) => res.layers.reduce((s, L) => s + L.posts.filter((p) => p.overloaded).length, 0);
+  const maxUtil = (res) => {
+    let best = null;
+    res.layers.forEach((L) => L.posts.forEach((p) => {
+      if (p.capacity > 0) { const u = p.load / p.capacity; if (best === null || u > best) best = u; }
+    }));
+    return best;
+  };
+  const issueKey = (e) => `${e.type}|${e.layer}|${e.post}`;
+  const issueChanges = (base, trial) => {
+    const bm = new Map(base.issues.map((e) => [issueKey(e), e]));
+    const tm = new Map(trial.issues.map((e) => [issueKey(e), e]));
+    const order = { overload: 0, hang: 1, unsupported: 2, failed: 3, overlap: 4, invalid: 5 };
+    const sortI = (arr) => arr.slice().sort((a, z) =>
+      (order[a.type] ?? 9) - (order[z.type] ?? 9) || a.layer - z.layer || String(a.post).localeCompare(String(z.post)));
+    const added = [], removed = [];
+    tm.forEach((v, k) => { if (!bm.has(k)) added.push(v); });
+    bm.forEach((v, k) => { if (!tm.has(k)) removed.push(v); });
+    return { added: sortI(added), removed: sortI(removed) };
+  };
+
+  const baseLost = baseline.totals.lostLoad;
+  const baseOver = countOver(baseline);
+  const baseUtil = maxUtil(baseline);
+  const scored = [];
+  for (const [x, y] of feasible) {
+    const trialState = JSON.parse(JSON.stringify(norm));
+    trialState.layers[li].posts.push({ id: newId, x, y, capacity: cap });
+    const trial = calculateLocal(trialState);
+    const lost = trial.totals.lostLoad;
+    const over = countOver(trial);
+    const util = maxUtil(trial);
+    scored.push({ lost, over, util: util === null ? Infinity : util, x, y, trial });
+  }
+  scored.sort((a, z) => a.lost - z.lost || a.over - z.over || a.util - z.util || a.x - z.x || a.y - z.y);
+
+  const plans = scored.slice(0, 5).map((s, idx) => {
+    const t = s.trial;
+    const np = t.layers[li].posts.find((p) => p.id === newId);
+    const rows = baseline.layers.map((bL, k) => {
+      const tL = t.layers[k];
+      const bOv = bL.posts.filter((p) => p.overloaded).length;
+      const tOv = tL.posts.filter((p) => p.overloaded).length;
+      return {
+        layer: tL.index, name: tL.name,
+        loadTotal: { base: bL.loadTotal, trial: tL.loadTotal },
+        lostLoad: { base: bL.lostLoad, trial: tL.lostLoad },
+        loadCarried: { base: bL.loadCarried, trial: tL.loadCarried },
+        overloadCount: { base: bOv, trial: tOv },
+      };
+    });
+    return {
+      rank: idx + 1,
+      post: { id: newId, x: r2(s.x), y: r2(s.y), capacity: r2(cap), load: np.load, overloaded: !!np.overloaded },
+      metrics: {
+        lostLoad: r2(s.lost),
+        overloadCount: s.over,
+        maxUtilization: s.util === Infinity ? null : Math.round(s.util * 10000) / 10000,
+        carriedAtBottom: t.totals.carriedAtBottom,
+      },
+      layers: rows,
+      issues: issueChanges(baseline, t),
+      result: t,
+    };
+  });
+
+  return {
+    ok: true, layer: li, layerName, spacing: r2(gap), capacity: r2(cap),
+    gridCount, feasibleCount: feasible.length,
+    baselineMetrics: {
+      lostLoad: baseLost, overloadCount: baseOver,
+      maxUtilization: baseUtil === null ? null : Math.round(baseUtil * 10000) / 10000,
+      carriedAtBottom: baseline.totals.carriedAtBottom,
+    },
+    plans, reason: null, toleranceMm: TOL_MM,
   };
 }

@@ -9,6 +9,9 @@ POST /api/recalc     对给定（或当前持久化）架体重算，返回完�
 GET  /api/result     直接返回当前持久化架体的重算结果
 POST /api/simulate   立柱失效推演：body {"state": 架体JSON(可省), "failed": [{"layer": 0, "post": "P1"}]}，
                      返回基准/推演/差值；只计算，不写盘、不保存失效标记
+POST /api/suggest    加柱建议：body {"state"(可省), "layer": 0, "spacing": 200, "capacity": 300}，
+                     在目标层承托面内按候选网格逐点试算新增一根立柱，返回前 5 个方案；
+                     只计算，不写盘；用户确认后由前端走 PUT /api/state 正式写入
 POST /api/reset      恢复内置示例数据
 """
 
@@ -20,7 +23,7 @@ import tempfile
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from .calc import calculate, simulate
+from .calc import calculate, simulate, suggest_posts
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -111,6 +114,27 @@ def api_reset():
     sample = _read_json(SAMPLE_FILE)
     _atomic_write_json(STATE_FILE, sample)
     return jsonify({"ok": True, "state": sample, "result": calculate(sample)})
+
+
+@app.route("/api/suggest", methods=["POST"])
+def api_suggest():
+    """加柱建议：逐点试算新增一根立柱。只计算，不写盘、不改动已保存状态。"""
+    payload = request.get_json(force=True, silent=True)
+    payload = payload if isinstance(payload, dict) else {}
+    state = payload.get("state")
+    if not isinstance(state, dict):
+        state = load_state()
+    # 参数非法（非数字、越界层、间距<=0）→ 400；无可行点属于正常结果 → 200 + reason
+    try:
+        result = suggest_posts(
+            state,
+            payload.get("layer"),
+            payload.get("spacing"),
+            payload.get("capacity"),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **result})
 
 
 if __name__ == "__main__":

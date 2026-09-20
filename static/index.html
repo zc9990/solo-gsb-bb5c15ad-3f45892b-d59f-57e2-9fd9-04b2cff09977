@@ -60,6 +60,7 @@
               <span><i class="dot overlap"></i>落点重叠</span>
               <span><i class="dot hanging"></i>悬空</span>
               <span><i class="dot failed"></i>失效（推演）</span>
+              <span id="suggestLegend" class="suggest-legend"><i class="dot suggest"></i>建议新柱（预览）</span>
             </div>
           </div>
           <canvas id="topView"></canvas>
@@ -89,6 +90,35 @@
         </p>
         <div id="simPicker" class="sim-picker"></div>
         <div id="simOutput"></div>
+      </div>
+
+      <div class="panel suggest-panel">
+        <div class="sim-head">
+          <h2>🧱 加柱建议 <span id="suggestStatus" class="badge">未试算</span></h2>
+          <div class="suggest-actions">
+            <button id="btnCancelSuggest" class="btn btn-ghost" type="button" disabled>✕ 取消预览（不改数据）</button>
+            <button id="btnConfirmSuggest" class="btn btn-confirm" type="button" disabled>✓ 确认加柱并保存</button>
+          </div>
+        </div>
+        <p class="hint">
+          选择<b>目标层</b>，设置候选网格间距与新柱容量（0=不限容量，不计利用率），后端仅在该层
+          <b>承托面内</b>、且与现有<b>有效柱</b>距离严格大于 <b id="tolText">10</b> mm（重叠阈值）的网格点上
+          逐点试算新增一根立柱，按「丢失载荷 → 超载数 → 最高利用率 → 坐标」升序返回前 5 个方案。
+          试算<span class="hl">不改动任何数据</span>；点击方案在俯视图预览，确认后才写入架体并自动保存。
+        </p>
+        <div class="suggest-form">
+          <label>目标层
+            <select id="suggestLayer"></select>
+          </label>
+          <label>候选网格间距 (mm)
+            <input type="number" step="any" id="suggestSpacing" value="100" min="1" />
+          </label>
+          <label>新柱容量 (kg，0=不限)
+            <input type="number" step="any" id="suggestCapacity" value="300" min="0" />
+          </label>
+          <button id="btnSuggest" class="btn btn-run" type="button">开始试算</button>
+        </div>
+        <div id="suggestOutput"></div>
       </div>
 
       <div class="bottom-grid">
