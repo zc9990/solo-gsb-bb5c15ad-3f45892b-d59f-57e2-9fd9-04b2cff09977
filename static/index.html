@@ -60,6 +60,7 @@
               <span><i class="dot overlap"></i>落点重叠</span>
               <span><i class="dot hanging"></i>悬空</span>
               <span><i class="dot failed"></i>失效（推演）</span>
+              <span><i class="dot suggest"></i>建议新柱（预览）</span>
             </div>
           </div>
           <canvas id="topView"></canvas>
@@ -74,6 +75,38 @@
             </div>
           </div>
           <canvas id="sideView"></canvas>
+        </div>
+      </div>
+
+      <div class="panel suggest-panel">
+        <div class="sim-head">
+          <h2>➕ 加柱建议 <span id="sugStatus" class="badge">未试算</span></h2>
+        </div>
+        <p class="hint">
+          选择目标层，设置候选网格间距与新柱容量，系统只在该层<b>承托面内</b>、且与现有
+          <b>有效柱距离大于 10 mm 重叠阈值</b>的位置逐点试算新增一根立柱，按
+          <b>丢失载荷、超载数、最高利用率、坐标</b>升序返回前 5 个方案（容量 0 = 不限，不计利用率）。
+          点击方案在俯视图预览；<span class="hl">确认后才写入架体并自动保存</span>，取消预览不改任何数据。
+        </p>
+        <div class="sug-controls">
+          <label>目标层
+            <select id="sugLayer"></select>
+          </label>
+          <label>候选网格间距 (mm)
+            <input type="number" id="sugSpacing" step="any" value="200" min="1" />
+          </label>
+          <label>新柱容量 (kg，0=不限)
+            <input type="number" id="sugCapacity" step="any" value="200" min="0" />
+          </label>
+          <button id="btnSuggest" class="btn btn-sug" type="button">🔍 开始逐点试算</button>
+        </div>
+        <div id="sugOutput"></div>
+        <div id="sugPreviewBar" class="sug-preview-bar" hidden>
+          <span id="sugPreviewText"></span>
+          <span class="sug-preview-actions">
+            <button id="btnSugConfirm" class="btn btn-sug" type="button">✓ 确认写入并重算保存</button>
+            <button id="btnSugCancel" class="btn btn-ghost" type="button">✕ 取消预览</button>
+          </span>
         </div>
       </div>
 

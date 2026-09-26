@@ -147,6 +147,7 @@ input:focus { outline: none; border-color: var(--accent); }
 .dot.overlap { background: var(--overlap); }
 .dot.hanging { background: var(--hang); }
 .dot.failed { background: var(--failed); }
+.dot.suggest { background: #28e0d2; }
 
 canvas {
   width: 100%;
@@ -244,4 +245,73 @@ canvas {
   .views { grid-template-columns: 1fr; }
   .bottom-grid { grid-template-columns: 1fr; }
   .sim-cols { grid-template-columns: 1fr; }
+}
+
+/* ---------- 加柱建议 ---------- */
+.suggest-panel { border-color: #1f5a58; }
+.badge.has-sug { color: #28e0d2; border-color: #28e0d2; }
+.btn-sug { border-color: #28e0d2; color: #28e0d2; background: rgba(40, 224, 210, 0.08); }
+.btn-sug:hover { background: rgba(40, 224, 210, 0.18); }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+.sug-controls {
+  display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 8px;
+  align-items: end; margin: 8px 0 6px;
+}
+.sug-controls select {
+  background: #0d1322; border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 5px 7px; font-size: 12px; width: 100%;
+}
+.sug-summary { font-size: 11px; line-height: 1.7; margin: 6px 0 8px; }
+.sug-list { display: flex; flex-direction: column; gap: 8px; }
+.sug-card {
+  border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
+  background: var(--panel2); cursor: pointer;
+}
+.sug-card:hover { outline: 1px solid #28e0d2; }
+.sug-card.selected { border-color: #28e0d2; outline: 1px solid #28e0d2; background: rgba(40, 224, 210, 0.07); }
+.sug-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; flex-wrap: wrap; }
+.sug-rank {
+  font-size: 11px; font-weight: 600; color: #062b29; background: #28e0d2;
+  border-radius: 5px; padding: 1px 8px;
+}
+.sug-coord { font-size: 12px; }
+.sug-metrics { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 7px; }
+.sug-mini { padding: 5px 10px; min-width: 108px; }
+.sug-mini .v { font-size: 15px; }
+.sug-mini .delta { font-size: 10px; color: var(--muted); margin-top: 1px; }
+.sug-layer-table-wrap { max-height: 170px; overflow-y: auto; margin-bottom: 7px; }
+.sug-layer-table { font-size: 11px; }
+.sug-layer-table tr.head td {
+  color: var(--muted); font-size: 10px; position: sticky; top: 0;
+  background: var(--panel2); z-index: 1;
+}
+.sug-layer-table tr.sug-target td { color: #28e0d2; }
+.sug-issues { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 7px; }
+.sug-issue-list { list-style: none; margin: 0; padding: 0; max-height: 130px; overflow-y: auto; }
+.sug-issue-list li {
+  padding: 5px 8px; border-radius: 6px; margin-bottom: 4px; font-size: 11px;
+  display: flex; gap: 7px; align-items: baseline; background: #0d1322;
+}
+.sug-issue-list li.removed { border-left: 3px solid var(--normal); }
+.sug-issue-list li.added { border-left: 3px solid var(--error); }
+.sug-issue-list .itype { font-size: 10px; flex: 0 0 44px; color: var(--muted); }
+.sug-card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sug-infeasible {
+  border: 1px solid var(--warn); border-radius: 9px; padding: 10px 12px;
+  background: rgba(240, 176, 60, 0.07); margin-top: 8px;
+}
+.sug-infeasible b { color: var(--warn); }
+.sug-infeasible p { margin: 6px 0 0; font-size: 12px; line-height: 1.7; }
+.sug-preview-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; margin-top: 10px; padding: 8px 12px;
+  border: 1px solid #28e0d2; border-radius: 9px; background: rgba(40, 224, 210, 0.08);
+  font-size: 12px;
+}
+.sug-preview-actions { display: flex; gap: 8px; }
+.pill.sug { color: #28e0d2; border-color: #28e0d2; }
+
+@media (max-width: 1200px) {
+  .sug-controls { grid-template-columns: 1fr 1fr; }
+  .sug-issues { grid-template-columns: 1fr; }
 }

@@ -26,10 +26,15 @@
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
 TOL_MM = 10.0  # 落点重叠判定距离（mm）
+
+# 加柱建议：逐点试算的候选网格点数上限（防止间距过小导致试算量爆炸）
+SUGGEST_MAX_GRID = 2500
+SUGGEST_TOP_N = 5
 
 
 # --------------------------------------------------------------------------
@@ -594,4 +599,273 @@ def _diff_results(base: Dict[str, Any], sim: Dict[str, Any]) -> Dict[str, Any]:
         "lostLoad": pair("lostLoad"),
         "posts": posts,
         "newIssues": new_issues,
+    }
+
+
+# --------------------------------------------------------------------------
+# 加柱建议（What-if）：在目标层承托面内逐点试算新增一根立柱
+# --------------------------------------------------------------------------
+def _suggest_payload(
+    layer: int,
+    spacing: float,
+    capacity: float,
+    feasible: bool,
+    reason: str,
+    *,
+    baseline: Optional[Dict[str, Any]] = None,
+    proposals: Optional[List[Dict[str, Any]]] = None,
+    tried: int = 0,
+    grid_count: int = 0,
+) -> Dict[str, Any]:
+    return {
+        "feasible": feasible,
+        "reason": reason,
+        "layer": layer,
+        "spacing": r2(spacing),
+        "capacity": r2(capacity),
+        "toleranceMm": TOL_MM,
+        "tried": tried,
+        "gridCount": grid_count,
+        "topN": SUGGEST_TOP_N,
+        "baseline": baseline,
+        "proposals": proposals or [],
+    }
+
+
+def suggest_posts(
+    raw_state: Optional[Dict[str, Any]],
+    layer: Any,
+    spacing: Any,
+    capacity: Any,
+) -> Dict[str, Any]:
+    """在指定层承托面内按候选网格逐点试算新增一根立柱，返回排序后前 5 个方案。
+
+    候选点必须：① 落在该层承托面（底层=窑车台面，其余=下层棚板）矩形内；
+    ② 与该层现有*有效*（非悬空）立柱底端平面距离严格大于 TOL_MM（重叠阈值），
+    避免新柱与现有柱落点重叠。每个候选点整架重算，按
+    （丢失载荷、超载数、最高利用率、x、y）依次升序排序，取前 5。
+
+    容量 0 的立柱不限容量、不计利用率。只计算，不修改、不持久化输入数据。
+    无可行点时 feasible=False，并在 reason 中明确限制原因。
+    """
+    try:
+        li = int(layer)
+    except (TypeError, ValueError):
+        return _suggest_payload(
+            _num(layer, 0), _num(spacing, 0), _num(capacity, 0), False,
+            "未选择有效的目标层，请先选择要加柱的层。",
+        )
+    gap = _num(spacing, 0.0)
+    cap = max(0.0, _num(capacity, 0.0))
+
+    state = normalize(raw_state)
+    layers = state["layers"]
+    n = len(layers)
+    if not (0 <= li < n):
+        return _suggest_payload(
+            li, gap, cap, False,
+            f"目标层序号 {li} 不存在（当前共 {n} 层），请重新选择。",
+        )
+    if gap <= 0:
+        return _suggest_payload(
+            li, gap, cap, False,
+            "候选网格间距必须大于 0 mm，请调大间距后重试。",
+        )
+
+    # 承托面：底层为窑车台面，其余为下一层棚板（与 calculate 内判定一致）
+    if li == 0:
+        car = state["car"]
+        support = {"x": 0.0, "y": 0.0, "w": car["w"], "d": car["d"]}
+        support_name = car["name"]
+    else:
+        lb = layers[li - 1]["board"]
+        support = {"x": lb["x"], "y": lb["y"], "w": lb["w"], "d": lb["d"]}
+        support_name = layers[li - 1]["name"] + "棚板"
+    if support["w"] <= 0 or support["d"] <= 0:
+        return _suggest_payload(
+            li, gap, cap, False,
+            f"{support_name}宽/深为 0，没有可放置新柱的承托面，请先修正该棚板尺寸。",
+        )
+
+    # 网格对齐到承托面左下角，边界点纳入（与 in_rect 的闭区间约定一致）
+    nx = int(math.floor(support["w"] / gap + 1e-9)) + 1
+    ny = int(math.floor(support["d"] / gap + 1e-9)) + 1
+    grid_count = nx * ny
+    if grid_count > SUGGEST_MAX_GRID:
+        return _suggest_payload(
+            li, gap, cap, False,
+            f"按间距 {r2(gap)} mm 生成的候选网格共 {grid_count} 个点，"
+            f"超过逐点试算上限 {SUGGEST_MAX_GRID} 个；请调大候选网格间距后重试。",
+            grid_count=grid_count,
+        )
+
+    baseline = calculate(state)
+    layer_res = baseline["layers"][li]
+
+    # 仅与现有*有效*（非悬空）柱保持距离；悬空柱不参与重叠判定（与 calculate 一致）
+    valid_pts = [
+        (p["x"], p["y"])
+        for p in layer_res["posts"]
+        if not p["hanging"]
+    ]
+
+    existing_ids = {p["id"] for p in layers[li]["posts"]}
+    k = 1
+    while f"P{k}" in existing_ids:
+        k += 1
+    new_id = f"P{k}"
+
+    tried = 0
+    scored: List[Tuple[float, int, float, float, float, Dict[str, Any]]] = []
+    for ix in range(nx):
+        cx = support["x"] + ix * gap
+        if cx > support["x"] + support["w"] + 1e-9:
+            cx = support["x"] + support["w"]
+        for iy in range(ny):
+            cy = support["y"] + iy * gap
+            if cy > support["y"] + support["d"] + 1e-9:
+                cy = support["y"] + support["d"]
+            # 与现有有效柱距离必须严格大于重叠阈值（≤ 阈值会产生落点重叠，不试算）
+            if any(
+                math.hypot(cx - px, cy - py) <= TOL_MM + 1e-9
+                for px, py in valid_pts
+            ):
+                continue
+            tried += 1
+            trial_state = copy.deepcopy(state)
+            trial_state["layers"][li]["posts"].append(
+                {"id": new_id, "x": cx, "y": cy, "capacity": cap}
+            )
+            res = calculate(trial_state)
+            lost_load = res["totals"]["lostLoad"]
+            overload_n = sum(1 for e in res["issues"] if e["type"] == "overload")
+            max_util = 0.0
+            for L in res["layers"]:
+                for p in L["posts"]:
+                    if p["capacity"] > 0:
+                        max_util = max(max_util, p["load"] / p["capacity"])
+            # （丢失载荷、超载数、最高利用率、x、y）依次升序
+            scored.append(
+                (lost_load, overload_n, max_util, cx, cy, res)
+            )
+
+    if not scored:
+        reason_parts = [
+            f"承托面（{support_name}）内 {grid_count} 个网格点"
+        ]
+        if valid_pts:
+            reason_parts.append(
+                f"全部落在现有有效柱 {TOL_MM:g} mm 重叠阈值范围内"
+            )
+        reason = (
+            "、".join(reason_parts)
+            + "，没有满足“承托面内且与现有有效柱距离大于重叠阈值”的可加柱位置。"
+        )
+        return _suggest_payload(
+            li, gap, cap, False, reason,
+            baseline=baseline, grid_count=grid_count,
+        )
+
+    scored.sort(key=lambda t: (t[0], t[1], t[2], t[3], t[4]))
+    proposals: List[Dict[str, Any]] = []
+    for lost_load, overload_n, max_util, cx, cy, res in scored[:SUGGEST_TOP_N]:
+        proposals.append(
+            {
+                "layer": li,
+                "layerName": layers[li]["name"],
+                "postId": new_id,
+                "x": r2(cx),
+                "y": r2(cy),
+                "capacity": r2(cap),
+                "metrics": {
+                    "lostLoad": r2(lost_load),
+                    "overloadCount": overload_n,
+                    "maxUtilization": round(max_util, 4),
+                },
+                "result": res,
+                "diff": _suggest_diff(baseline, res),
+            }
+        )
+
+    base_overload = sum(1 for e in baseline["issues"] if e["type"] == "overload")
+    base_util = 0.0
+    for L in baseline["layers"]:
+        for p in L["posts"]:
+            if p["capacity"] > 0:
+                base_util = max(base_util, p["load"] / p["capacity"])
+    return _suggest_payload(
+        li, gap, cap, True, "",
+        baseline=baseline, proposals=proposals,
+        tried=tried, grid_count=grid_count,
+    ) | {"baselineMetrics": {
+        "lostLoad": baseline["totals"]["lostLoad"],
+        "overloadCount": base_overload,
+        "maxUtilization": round(base_util, 4),
+    }}
+
+
+def _suggest_diff(base: Dict[str, Any], cand: Dict[str, Any]) -> Dict[str, Any]:
+    """基准 vs 加柱方案：逐层载荷对比 + 新增/消除告警。"""
+
+    def issue_key(e: Dict[str, Any]) -> Tuple[str, int, str]:
+        return (e["type"], e["layer"], str(e["post"]))
+
+    base_by_key = {issue_key(e): e for e in base["issues"] if e["level"] in ("error", "warn")}
+    cand_by_key = {issue_key(e): e for e in cand["issues"] if e["level"] in ("error", "warn")}
+    added = [cand_by_key[k] for k in cand_by_key.keys() - base_by_key.keys()]
+    removed = [base_by_key[k] for k in base_by_key.keys() - cand_by_key.keys()]
+    added.sort(key=lambda e: (e["layer"], e["type"], str(e["post"])))
+    removed.sort(key=lambda e: (e["layer"], e["type"], str(e["post"])))
+
+    base_layers = {L["index"]: L for L in base["layers"]}
+    layer_rows: List[Dict[str, Any]] = []
+    for L in cand["layers"]:
+        b = base_layers.get(L["index"]) or {}
+        layer_rows.append(
+            {
+                "index": L["index"],
+                "name": L["name"],
+                "loadTotal": {
+                    "base": b.get("loadTotal", 0.0),
+                    "cand": L["loadTotal"],
+                    "delta": r2(L["loadTotal"] - b.get("loadTotal", 0.0)),
+                },
+                "loadCarried": {
+                    "base": b.get("loadCarried", 0.0),
+                    "cand": L["loadCarried"],
+                    "delta": r2(L["loadCarried"] - b.get("loadCarried", 0.0)),
+                },
+                "lostLoad": {
+                    "base": b.get("lostLoad", 0.0),
+                    "cand": L["lostLoad"],
+                    "delta": r2(L["lostLoad"] - b.get("lostLoad", 0.0)),
+                },
+                "supportedCount": {
+                    "base": b.get("supportedCount", 0),
+                    "cand": L["supportedCount"],
+                },
+            }
+        )
+
+    return {
+        "totals": {
+            "carriedAtBottom": {
+                "base": base["totals"]["carriedAtBottom"],
+                "cand": cand["totals"]["carriedAtBottom"],
+                "delta": r2(
+                    cand["totals"]["carriedAtBottom"]
+                    - base["totals"]["carriedAtBottom"]
+                ),
+            },
+            "lostLoad": {
+                "base": base["totals"]["lostLoad"],
+                "cand": cand["totals"]["lostLoad"],
+                "delta": r2(
+                    cand["totals"]["lostLoad"] - base["totals"]["lostLoad"]
+                ),
+            },
+        },
+        "layers": layer_rows,
+        "addedIssues": added,
+        "removedIssues": removed,
     }
